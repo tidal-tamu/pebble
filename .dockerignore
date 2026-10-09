@@ -1,0 +1,16 @@
+.git
+.github
+.env
+.env.*
+!.env.example
+*.json
+.venv
+venv
+env
+**/__pycache__
+**/*.py[cod]
+.vscode
+.idea
+tests
+docs
+*.md

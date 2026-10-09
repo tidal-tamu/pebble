@@ -1,45 +1,49 @@
 import gspread
 from google.oauth2.service_account import Credentials
-import os
 import logging
 
-logger = logging.getLogger('discord')
+from config import ConfigurationError, Settings
+
+logger = logging.getLogger(__name__)
 
 # Sheet/tab names as they appear in the F26 Tracker
 TASKS_SHEET = "Tasks"
 OFFICER_LIST_SHEET = "Officer List"
 
 
+class SheetsError(RuntimeError):
+    """A readable error that can be shown privately to a command caller."""
+
+
 class SheetsClient:
-    def __init__(self):
+    def __init__(self, settings: Settings):
         self.scopes = [
-            "https://www.googleapis.com/auth/spreadsheets",
-            "https://www.googleapis.com/auth/drive",
+            "https://www.googleapis.com/auth/spreadsheets.readonly",
+            "https://www.googleapis.com/auth/drive.readonly",
         ]
-        self.credentials_file = "service_account.json"
+        self.credentials_file = settings.credentials_file
+        self.spreadsheet_id = settings.spreadsheet_id
 
         try:
             self.credentials = Credentials.from_service_account_file(
                 self.credentials_file, scopes=self.scopes
             )
             self.client = gspread.authorize(self.credentials)
-            self.spreadsheet_id = os.getenv('SPREADSHEET_ID')
-        except FileNotFoundError:
-            logger.error(
-                "service_account.json not found. Google Sheets integration will fail."
-            )
-            self.client = None
+            self.client.set_timeout((5, 20))
+        except Exception as error:
+            raise ConfigurationError(
+                "Can't load Google credentials. Check GOOGLE_CREDENTIALS_FILE and the service-account JSON key."
+            ) from error
 
     def get_sheet(self, sheet_name=TASKS_SHEET):
-        if not self.client:
-            return None
-
         try:
             spreadsheet = self.client.open_by_key(self.spreadsheet_id)
             return spreadsheet.worksheet(sheet_name)
         except Exception as e:
-            logger.error(f"Error accessing worksheet '{sheet_name}': {e}")
-            return None
+            logger.error("Access to worksheet %s failed (%s)", sheet_name, type(e).__name__)
+            raise SheetsError(
+                f"Couldn't access the {sheet_name} tab. Check spreadsheet sharing, tab names, and Google API access."
+            ) from e
 
     def get_all_tasks(self, sheet_name=TASKS_SHEET):
         """
@@ -47,14 +51,11 @@ class SheetsClient:
         Expected headers: Task | Priority | Team | Officer | Status | Link
         """
         sheet = self.get_sheet(sheet_name)
-        if not sheet:
-            return []
-
         try:
             return sheet.get_all_records()
         except Exception as e:
-            logger.error(f"Failed to read tasks: {e}")
-            return []
+            logger.error("Reading tasks failed (%s)", type(e).__name__)
+            raise SheetsError("Couldn't read tasks. Check the Tasks header row and try again.") from e
 
     def get_officer_id_map(self, sheet_name=OFFICER_LIST_SHEET):
         """
@@ -67,30 +68,29 @@ class SheetsClient:
         added when they're unambiguous across the roster.
         """
         sheet = self.get_sheet(sheet_name)
-        if not sheet:
-            return {}
-
         try:
-            rows = sheet.get_all_records()
+            # Preserve large Discord IDs as strings during gspread's conversion.
+            rows = sheet.get_all_records(numericise_ignore=['all'])
         except Exception as e:
-            logger.error(f"Failed to read officer list: {e}")
-            return {}
+            logger.error("Reading officers failed (%s)", type(e).__name__)
+            raise SheetsError("Couldn't read the Officer List. Check its header row and try again.") from e
 
         full_name_map = {}
         first_name_index = {}
         first_name_collisions = set()
 
         for row in rows:
+            row = {str(key).strip().lower(): value for key, value in row.items()}
             name = (
-                row.get('Name')
-                or row.get('Officer')
-                or row.get('Officer Name')
+                row.get('name')
+                or row.get('officer')
+                or row.get('officer name')
                 or ''
             )
             discord_id = (
-                row.get('Discord ID')
-                or row.get('DiscordID')
-                or row.get('Discord')
+                row.get('discord id')
+                or row.get('discordid')
+                or row.get('discord')
                 or ''
             )
 
@@ -121,16 +121,3 @@ class SheetsClient:
             )
 
         return mapping
-
-    def update_task_status(self, row_index, status_col_index, new_status, sheet_name=TASKS_SHEET):
-        """Update a single cell (1-based indices)."""
-        sheet = self.get_sheet(sheet_name)
-        if not sheet:
-            return False
-
-        try:
-            sheet.update_cell(row_index, status_col_index, new_status)
-            return True
-        except Exception as e:
-            logger.error(f"Failed to update task status: {e}")
-            return False

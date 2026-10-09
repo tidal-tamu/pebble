@@ -3,6 +3,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from checks import is_officer
+from errors import respond_error
 
 
 class Announcements(commands.Cog):
@@ -25,6 +26,12 @@ class Announcements(commands.Cog):
         message: str,
         ping_role: str = None,
     ):
+        if len(title) > 256 or len(message) > 4096:
+            await interaction.response.send_message(
+                "Keep the title within 256 characters and the message within 4,096 characters.", ephemeral=True
+            )
+            return
+        await interaction.response.defer(ephemeral=True, thinking=True)
         embed = discord.Embed(
             title=title,
             description=message,
@@ -36,22 +43,17 @@ class Announcements(commands.Cog):
 
         try:
             await channel.send(content=content, embed=embed)
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 f"Announcement sent successfully to {channel.mention}!", ephemeral=True
             )
         except discord.Forbidden:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "I don't have permission to send messages in that channel.", ephemeral=True
             )
 
     @announce.error
     async def announce_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):
-        if isinstance(error, app_commands.CheckFailure):
-            await interaction.response.send_message(
-                "You need the Officer role to use this command.", ephemeral=True
-            )
-        else:
-            raise error
+        await respond_error(interaction, error)
 
 
 async def setup(bot):

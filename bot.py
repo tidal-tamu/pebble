@@ -1,54 +1,71 @@
-import os
-import discord
-from discord.ext import commands
-from dotenv import load_dotenv
+"""Pebble's entry point and Discord connection lifecycle."""
+
 import logging
 
-# Load environment variables
-load_dotenv()
+import discord
+from discord.ext import commands
 
-# Setup logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger('discord')
+from config import ConfigurationError, Settings
 
-# Bot Setup
-intents = discord.Intents.default()
-intents.message_content = True
-intents.members = True # Required to ping specific members reliably
+logger = logging.getLogger(__name__)
+EXTENSIONS = ("cogs.reminders", "cogs.announcements")
+
 
 class PebbleBot(commands.Bot):
-    def __init__(self):
-        super().__init__(command_prefix='!', intents=intents)
+    def __init__(self, settings: Settings | None = None):
+        self.settings = settings or Settings.from_env()
+        intents = discord.Intents.default()
+        intents.message_content = True
+        intents.members = True
+        super().__init__(command_prefix="!", intents=intents)
 
     async def setup_hook(self):
-        # Load cogs
-        cogs = ['cogs.reminders', 'cogs.announcements']
-        for cog in cogs:
-            try:
-                await self.load_extension(cog)
-                logger.info(f"Loaded cog: {cog}")
-            except Exception as e:
-                logger.error(f"Failed to load cog {cog}: {e}")
+        # A missing feature is a startup failure, rather than a partially working bot.
+        for extension in EXTENSIONS:
+            await self.load_extension(extension)
+            logger.info("Loaded extension: %s", extension)
 
-        # Sync slash commands
-        guild_id = os.getenv('GUILD_ID')
-        if guild_id:
-            logger.info("Syncing commands to specific guild for faster testing...")
-            self.tree.copy_global_to(guild=discord.Object(id=int(guild_id)))
-            await self.tree.sync(guild=discord.Object(id=int(guild_id)))
+        if self.settings.guild_id:
+            guild = discord.Object(id=self.settings.guild_id)
+            self.tree.copy_global_to(guild=guild)
+            synced = await self.tree.sync(guild=guild)
+            logger.info("Registered %d commands in the configured guild", len(synced))
         else:
-            logger.info("Syncing commands globally...")
-            await self.tree.sync()
+            synced = await self.tree.sync()
+            logger.info("Registered %d commands globally", len(synced))
 
     async def on_ready(self):
-        logger.info(f'Logged in as {self.user} (ID: {self.user.id})')
-        logger.info('------')
+        logger.info("Connected as %s (ID: %s)", self.user, self.user.id)
 
-if __name__ == '__main__':
-    TOKEN = os.getenv('DISCORD_TOKEN')
-    if not TOKEN:
-        logger.error("No DISCORD_TOKEN found in environment variables!")
-        exit(1)
-        
-    bot = PebbleBot()
-    bot.run(TOKEN)
+
+def main():
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    try:
+        settings = Settings.from_env()
+    except ConfigurationError as error:
+        logger.error("Configuration error: %s", error)
+        return 1
+
+    logging.getLogger().setLevel(settings.log_level)
+    try:
+        bot = PebbleBot(settings)
+        # Use the root handler above so Discord log messages aren't duplicated.
+        bot.run(settings.discord_token, log_handler=None)
+    except discord.LoginFailure:
+        logger.error("Discord rejected the token. Update DISCORD_TOKEN.")
+        return 1
+    except discord.PrivilegedIntentsRequired:
+        logger.error("Enable Server Members and Message Content intents in the Discord Developer Portal.")
+        return 1
+    except Exception as error:
+        original = getattr(error, "original", error)
+        if isinstance(original, ConfigurationError):
+            logger.error("Configuration error: %s", original)
+        else:
+            logger.error("Startup failed (%s). Check configuration, credentials, and network access.", type(original).__name__)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

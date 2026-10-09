@@ -1,0 +1,19 @@
+services:
+  pebble:
+    build: .
+    restart: unless-stopped
+    init: true
+    env_file: .env
+    environment:
+      GOOGLE_CREDENTIALS_FILE: /run/secrets/google_credentials
+    secrets:
+      - google_credentials
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+secrets:
+  google_credentials:
+    file: ./service_account.json

@@ -1,6 +1,9 @@
 # Secrets
 .env
+.env.*
+!.env.example
 service_account.json
+secrets/
 
 # Python
 __pycache__/

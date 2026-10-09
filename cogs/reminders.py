@@ -2,14 +2,15 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 import logging
-import os
+import asyncio
 import re
 from datetime import datetime, date, timedelta
 
 from sheets import SheetsClient
 from checks import is_officer
+from errors import respond_error
 
-logger = logging.getLogger('discord')
+logger = logging.getLogger(__name__)
 
 # How many days before the due date we start nagging. Overdue tasks always fire.
 REMIND_WITHIN_DAYS = 7
@@ -141,19 +142,24 @@ class SweepResult:
 class Reminders(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.sheets_client = SheetsClient()
+        self.sheets_client = SheetsClient(bot.settings)
+        self._sheets_lock = asyncio.Lock()
+        self._sweep_lock = asyncio.Lock()
+
+    async def _read_tracker(self, include_officers=False):
+        # gspread uses blocking HTTP. Serialize access to its shared session,
+        # while allowing Discord's event loop to continue processing commands.
+        async with self._sheets_lock:
+            tasks_rows = await asyncio.to_thread(self.sheets_client.get_all_tasks)
+            officer_map = (
+                await asyncio.to_thread(self.sheets_client.get_officer_id_map)
+                if include_officers else {}
+            )
+            return tasks_rows, officer_map
 
     def _get_reminder_channel(self):
         """Resolve the configured reminder channel, or (None, error_message)."""
-        channel_id = os.getenv('REMINDER_CHANNEL_ID')
-        if not channel_id:
-            return None, "REMINDER_CHANNEL_ID is not set in .env."
-
-        try:
-            channel_id_int = int(channel_id)
-        except ValueError:
-            return None, f"REMINDER_CHANNEL_ID '{channel_id}' is not a valid number."
-
+        channel_id_int = self.bot.settings.reminder_channel_id
         channel = self.bot.get_channel(channel_id_int)
         if channel is None:
             return None, (
@@ -172,12 +178,11 @@ class Reminders(commands.Cog):
             result.error = err
             return result
 
-        tasks_rows = self.sheets_client.get_all_tasks()
+        tasks_rows, officer_map = await self._read_tracker(include_officers=True)
         if not tasks_rows:
-            result.error = "Couldn't read the Tasks tab (sheet empty or unreachable)."
+            result.error = "The Tasks tab is empty."
             return result
 
-        officer_map = self.sheets_client.get_officer_id_map()
         if not officer_map:
             result.error = (
                 "Officer List is empty or missing Discord IDs. "
@@ -251,17 +256,11 @@ class Reminders(commands.Cog):
                 )
                 return result
             except Exception as e:
-                logger.error(f"Failed sending reminder for '{task_desc}': {e}")
+                logger.error("Sending a reminder failed (%s)", type(e).__name__)
+                result.error = f"Delivery failed after {result.sent} reminder(s). Please check channel access before retrying."
+                return result
 
         return result
-
-    async def _respond_check_failure(
-        self, interaction: discord.Interaction, message: str
-    ):
-        if interaction.response.is_done():
-            await interaction.followup.send(message, ephemeral=True)
-        else:
-            await interaction.response.send_message(message, ephemeral=True)
 
     # ---------- /remind ----------
 
@@ -277,13 +276,15 @@ class Reminders(commands.Cog):
             f"/remind invoked by {interaction.user} ({interaction.user.id})"
         )
 
+        if self._sweep_lock.locked():
+            await interaction.followup.send("A reminder sweep is already running. Please wait for it to finish.", ephemeral=True)
+            return
+
         try:
-            result = await self._run_sweep()
+            async with self._sweep_lock:
+                result = await self._run_sweep()
         except Exception as e:
-            logger.exception("Unexpected error during /remind sweep")
-            await interaction.followup.send(
-                f"Something blew up while running the sweep: `{e}`", ephemeral=True
-            )
+            await respond_error(interaction, e)
             return
 
         channel, _ = self._get_reminder_channel()
@@ -292,12 +293,7 @@ class Reminders(commands.Cog):
 
     @remind.error
     async def remind_error(self, interaction, error):
-        if isinstance(error, app_commands.CheckFailure):
-            await self._respond_check_failure(
-                interaction, "You need the Officer role to use this command."
-            )
-        else:
-            raise error
+        await respond_error(interaction, error)
 
     # ---------- /my-tasks ----------
 
@@ -309,14 +305,13 @@ class Reminders(commands.Cog):
     async def my_tasks(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True, thinking=True)
 
-        tasks_rows = self.sheets_client.get_all_tasks()
+        tasks_rows, officer_map = await self._read_tracker(include_officers=True)
         if not tasks_rows:
             await interaction.followup.send(
-                "Couldn't read the Tasks tab.", ephemeral=True
+                "The Tasks tab is empty.", ephemeral=True
             )
             return
 
-        officer_map = self.sheets_client.get_officer_id_map()
         if not officer_map:
             await interaction.followup.send(
                 "Officer List is empty or missing Discord IDs.", ephemeral=True
@@ -356,12 +351,7 @@ class Reminders(commands.Cog):
 
     @my_tasks.error
     async def my_tasks_error(self, interaction, error):
-        if isinstance(error, app_commands.CheckFailure):
-            await self._respond_check_failure(
-                interaction, "You need the Officer role to use this command."
-            )
-        else:
-            raise error
+        await respond_error(interaction, error)
 
     # ---------- /tasks ----------
 
@@ -373,10 +363,10 @@ class Reminders(commands.Cog):
     async def all_tasks(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True, thinking=True)
 
-        tasks_rows = self.sheets_client.get_all_tasks()
+        tasks_rows, _ = await self._read_tracker()
         if not tasks_rows:
             await interaction.followup.send(
-                "Couldn't read the Tasks tab.", ephemeral=True
+                "The Tasks tab is empty.", ephemeral=True
             )
             return
 
@@ -406,12 +396,7 @@ class Reminders(commands.Cog):
 
     @all_tasks.error
     async def all_tasks_error(self, interaction, error):
-        if isinstance(error, app_commands.CheckFailure):
-            await self._respond_check_failure(
-                interaction, "You need the Officer role to use this command."
-            )
-        else:
-            raise error
+        await respond_error(interaction, error)
 
 
 async def setup(bot):
