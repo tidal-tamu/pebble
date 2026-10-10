@@ -7,6 +7,7 @@ from discord import app_commands
 from sheets import SheetsError
 from gmail import GmailError
 from gemini import GeminiError
+from harp import HarpError
 
 logger = logging.getLogger(__name__)
 
@@ -15,7 +16,7 @@ async def respond_error(interaction, error):
     original = getattr(error, "original", error)
     if isinstance(original, app_commands.CheckFailure):
         message = "You need the Officer role to use this command."
-    elif isinstance(original, (SheetsError, GmailError, GeminiError)):
+    elif isinstance(original, (SheetsError, GmailError, GeminiError, HarpError)):
         message = str(original)
     else:
         logger.error("Command %s failed (%s)", getattr(interaction.command, "name", "unknown"), type(original).__name__)

@@ -15,6 +15,12 @@ All commands require the configured Officer role and run inside a Discord server
 | `/remind` | Posts one message per eligible task in the configured reminder channel and mentions its assigned officers. |
 | `/announce` | Posts a titled announcement in a selected channel. The optional `ping_role` is literal mention text such as `<@&ROLE_ID>`. |
 | `/summarize-emails` | Privately summarizes `24h` or `7d` conversations. Disabled by default; supports a fictional demo and explicitly configured live mode. |
+| `/registration-stats` | Posts live Harp registration totals and counts by status in the channel. |
+
+`/registration-stats` shows submitted applications prominently. Applications
+started includes drafts; submitted includes every non-draft status. Set
+`HARP_BOT_API_KEY` in the bot's server-side environment or untracked `.env`,
+restart the bot, then use the command in the club server with the Officer role.
 
 Reminders include overdue tasks, tasks due within seven days, and tasks without a
 recognized due date. `done` and `completed` statuses are skipped, ignoring case.
@@ -48,7 +54,7 @@ Then start the bot from the repository:
 .\.venv\Scripts\python.exe bot.py
 ```
 
-On Linux/macOS, use `.venv/bin/python bot.py`. The log should show both extensions
+On Linux/macOS, use `.venv/bin/python bot.py`. The log should show the extensions
 loaded, commands registered, and Pebble connected. Stop the process with Ctrl+C.
 The computer and process must stay running for the bot to remain online.
 
@@ -61,7 +67,7 @@ variables override `.env`, and relative credential paths resolve from the repo.
 | --- | --- | --- |
 | `DISCORD_TOKEN` | Yes | Bot token from the Discord Developer Portal. |
 | `SPREADSHEET_ID` | Yes | Spreadsheet ID between `/d/` and `/edit`; not the full URL. |
-| `OFFICER_ROLE_ID` | Yes | Role allowed to invoke all four commands. |
+| `OFFICER_ROLE_ID` | Yes | Role allowed to invoke the commands. |
 | `REMINDER_CHANNEL_ID` | Yes | Channel receiving task reminders. |
 | `GUILD_ID` | No | Server for immediate guild-scoped command registration. Leave blank for global registration. |
 | `GOOGLE_CREDENTIALS_FILE` | No | Defaults to `service_account.json`. Compose overrides this with the mounted secret path. |
@@ -71,6 +77,7 @@ variables override `.env`, and relative credential paths resolve from the repo.
 | `GEMINI_MODEL` | No | Defaults to `gemini-3.5-flash-lite`. |
 | `GMAIL_TOKEN_FILE` | For live | Saved OAuth token; defaults to `secrets/gmail_token.json`. |
 | `GMAIL_EXPECTED_ACCOUNT` | For live | Mailbox identity that the saved Gmail token must match. |
+| `HARP_BOT_API_KEY` | For registration stats | Private bearer key for Harp's registration integration API. Leave blank to keep the command unavailable. |
 
 Tokens and credential keys are excluded from Git and the Docker build. Keep keys
 outside tracked files; `.gitignore` cannot protect a secret that was already committed.
@@ -83,6 +90,7 @@ config.py              Validated configuration
 checks.py              Shared Officer-role access check
 errors.py              Shared private command-error responses
 sheets.py              Google Sheets adapter and officer name resolution
+harp.py                Harp integration client and registration response parser
 cogs/                  Discord feature modules
 tests/                 Offline regression tests
 docs/                  Setup, deployment, and architecture guides
@@ -112,8 +120,8 @@ role is denied. Avoid reminder testing against a full tracker of real assignees.
 - [Gmail authorization setup](docs/gmail.md)
 
 Manual email summaries are available through `/summarize-emails`; see the Gmail
-guide for mode selection and setup. Daily digests, registration counts, and
-reaction roles remain planned. Local Gmail authorization and a Gemini preview
+guide for mode selection and setup. Daily digests and reaction roles remain
+planned. Local Gmail authorization and a Gemini preview
 using fictional threads are also available.
 The current bot uses Sheets as its source of truth and has no
 local database. Add persistent storage when a feature needs saved mappings or

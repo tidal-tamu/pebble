@@ -29,6 +29,7 @@ class Settings:
     gmail_expected_account: str = ""
     gemini_api_key: str = field(default="", repr=False)
     gemini_model: str = "gemini-3.5-flash-lite"
+    harp_bot_api_key: str = field(default="", repr=False)
 
     @classmethod
     def from_env(cls):
@@ -91,4 +92,5 @@ class Settings:
             gmail_expected_account=gmail_account,
             gemini_api_key=gemini_key,
             gemini_model=gemini_model,
+            harp_bot_api_key=values.get("HARP_BOT_API_KEY", "").strip(),
         )
