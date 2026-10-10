@@ -24,6 +24,11 @@ class Settings:
     guild_id: int | None = None
     credentials_file: Path = ROOT / "service_account.json"
     log_level: str = "INFO"
+    email_summary_mode: str = "disabled"
+    gmail_token_file: Path = ROOT / "secrets" / "gmail_token.json"
+    gmail_expected_account: str = ""
+    gemini_api_key: str = field(default="", repr=False)
+    gemini_model: str = "gemini-3.5-flash-lite"
 
     @classmethod
     def from_env(cls):
@@ -57,6 +62,22 @@ class Settings:
         log_level = values.get("LOG_LEVEL", "INFO").strip().upper()
         if log_level not in {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}:
             raise ConfigurationError("LOG_LEVEL must be DEBUG, INFO, WARNING, ERROR, or CRITICAL.")
+        email_mode = values.get("EMAIL_SUMMARY_MODE", "disabled").strip().lower()
+        if email_mode not in {"disabled", "demo", "live"}:
+            raise ConfigurationError("EMAIL_SUMMARY_MODE must be disabled, demo, or live.")
+        gmail_token_file = Path(values.get("GMAIL_TOKEN_FILE", "secrets/gmail_token.json"))
+        if not gmail_token_file.is_absolute():
+            gmail_token_file = ROOT / gmail_token_file
+        gemini_key = values.get("GEMINI_API_KEY", "").strip()
+        gemini_model = values.get("GEMINI_MODEL", "gemini-3.5-flash-lite").strip()
+        gmail_account = values.get("GMAIL_EXPECTED_ACCOUNT", "").strip().lower()
+        if email_mode != "disabled":
+            if not gemini_key or gemini_key.startswith("your_"):
+                raise ConfigurationError("Set GEMINI_API_KEY before enabling email summaries.")
+            if not re.fullmatch(r"[A-Za-z0-9._-]+", gemini_model):
+                raise ConfigurationError("GEMINI_MODEL must be a model name, not a URL.")
+        if email_mode == "live" and not gmail_account:
+            raise ConfigurationError("Set GMAIL_EXPECTED_ACCOUNT before enabling live email summaries.")
         return cls(
             discord_token=required("DISCORD_TOKEN"),
             spreadsheet_id=spreadsheet_id,
@@ -65,4 +86,9 @@ class Settings:
             guild_id=discord_id("GUILD_ID", optional=True),
             credentials_file=credentials_file,
             log_level=log_level,
+            email_summary_mode=email_mode,
+            gmail_token_file=gmail_token_file,
+            gmail_expected_account=gmail_account,
+            gemini_api_key=gemini_key,
+            gemini_model=gemini_model,
         )

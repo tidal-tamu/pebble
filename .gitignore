@@ -3,7 +3,12 @@
 .env.*
 !.env.example
 service_account.json
+pebble_gmail.json
+gmail_token.json
+gmail_client.json
 secrets/
+# Host-specific resource limits; kept alongside the shared droplet deployment.
+/compose.override.yaml
 
 # Python
 __pycache__/

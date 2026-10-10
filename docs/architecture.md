@@ -14,6 +14,10 @@ appropriate for a club bot and gives each feature a clear home.
 | `sheets.py` | Synchronous read-only Google API calls and officer lookup. |
 | `cogs/reminders.py` | Task filtering, task views, reminder formatting/delivery. |
 | `cogs/announcements.py` | Announcement input validation and delivery. |
+| `cogs/emails.py` | Officer-only summaries, private pagination, concurrency lock, and cooldown. |
+| `gmail.py` | Bounded read-only Gmail selection and MIME parsing. |
+| `gemini.py` | Structured digest generation and validation of source references. |
+| `email_summary.py` | Demo/live orchestration, bounded batching, and safe Discord formatting. |
 
 Settings are loaded once at startup and passed through `bot.settings`. Required
 values fail validation before login. Credential parsing happens when the
@@ -59,7 +63,7 @@ does not require an application framework.
 | --- | --- | --- |
 | Reaction roles | Officer-created message with emoji/role mappings | Persist mappings; handle uncached messages; decide removal behavior; enforce role hierarchy and assignable-role limits. |
 | Registration counts | Officer command fetching aggregate counts | Authenticated API contract, timeout/retry policy, definition of count, and freshness timestamp. |
-| Gmail + Gemini digest | Manual private preview before daily delivery | Account authorization, email selection, allowed destination, content-handling policy, model/cost choice, scheduling, and durable progress. |
+| Gmail + Gemini digest | Manual private command implemented; demo/live opt-in | Daily scheduling, persistent progress/deduplication, and evaluation on permitted real correspondence remain future work. |
 
 Before scheduling anything, add an explicit timezone and decide how jobs recover
 after downtime. Record completed runs in persistent storage and define retry

@@ -8,7 +8,7 @@ from discord.ext import commands
 from config import ConfigurationError, Settings
 
 logger = logging.getLogger(__name__)
-EXTENSIONS = ("cogs.reminders", "cogs.announcements")
+EXTENSIONS = ("cogs.reminders", "cogs.announcements", "cogs.emails")
 
 
 class PebbleBot(commands.Bot):

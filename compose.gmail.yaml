@@ -1,0 +1,11 @@
+# Optional live Gmail mount. Include this alongside compose.yaml and any host override.
+services:
+  pebble:
+    environment:
+      GMAIL_TOKEN_FILE: /run/secrets/gmail_token
+    secrets:
+      - gmail_token
+
+secrets:
+  gmail_token:
+    file: ./secrets/gmail_token.json

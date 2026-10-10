@@ -2,6 +2,14 @@
 
 ## Deployment model
 
+The current club droplet also hosts HARP registration. On that shared host, use
+the existing Docker installation and always specify the Pebble project with
+`docker compose -p pebble`. Skip host installation, firewall changes, and reboot
+verification below; those first-host steps apply only to a dedicated droplet.
+Keep Pebble's resource-limit `compose.override.yaml`. See the
+[Gmail guide](gmail.md#deploy-on-the-shared-harp-droplet) for the shared-host
+command and optional live Gmail mount.
+
 Run one Docker Compose service on a Linux DigitalOcean droplet. Keep only one
 Pebble instance running for a given token: multiple instances can receive the
 same events and perform duplicate work. Stop the local bot before starting the
