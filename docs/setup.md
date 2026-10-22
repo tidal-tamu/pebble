@@ -36,6 +36,11 @@ Enable Developer Mode under Discord's User Settings > Advanced, then copy:
 Give testers the Officer role. Administrator permission alone does not bypass
 Pebble's Officer-role check.
 
+To enable `/assign-role`, copy the Judge, Mentor, and Hacker role IDs into
+`JUDGE_ROLE_ID`, `MENTOR_ROLE_ID`, and `HACKER_ROLE_ID`, then restart Pebble.
+Grant the bot Manage Roles and place its highest role above those three roles.
+The command accepts only those participant roles and requires the Officer role.
+
 ## Google service account
 
 1. Select/create a project in [Google Cloud Console](https://console.cloud.google.com/).

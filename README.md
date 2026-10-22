@@ -16,6 +16,12 @@ All commands require the configured Officer role and run inside a Discord server
 | `/announce` | Posts a titled announcement in a selected channel. The optional `ping_role` is literal mention text such as `<@&ROLE_ID>`. |
 | `/summarize-emails` | Privately summarizes `24h` or `7d` conversations. Disabled by default; supports a fictional demo and explicitly configured live mode. |
 | `/registration-stats` | Posts live Harp registration totals and counts by status in the channel. |
+| `/assign-role user role` | Assigns an existing judge, mentor, or hacker role to a server member. Only those three choices are accepted. |
+
+For `/assign-role`, set `JUDGE_ROLE_ID`, `MENTOR_ROLE_ID`, and `HACKER_ROLE_ID`
+to the corresponding server role IDs and restart the bot. The bot needs **Manage
+Roles**, with its highest role above all three roles. Replies are private, existing
+roles are preserved, and this command cannot grant the configured Officer role.
 
 `/registration-stats` shows submitted applications prominently. Applications
 started includes drafts; submitted includes every non-draft status. Set
@@ -68,6 +74,7 @@ variables override `.env`, and relative credential paths resolve from the repo.
 | `DISCORD_TOKEN` | Yes | Bot token from the Discord Developer Portal. |
 | `SPREADSHEET_ID` | Yes | Spreadsheet ID between `/d/` and `/edit`; not the full URL. |
 | `OFFICER_ROLE_ID` | Yes | Role allowed to invoke the commands. |
+| `JUDGE_ROLE_ID`, `MENTOR_ROLE_ID`, `HACKER_ROLE_ID` | For role assignment | Existing server roles allowed by `/assign-role`. An unset role cannot be assigned. |
 | `REMINDER_CHANNEL_ID` | Yes | Channel receiving task reminders. |
 | `GUILD_ID` | No | Server for immediate guild-scoped command registration. Leave blank for global registration. |
 | `GOOGLE_CREDENTIALS_FILE` | No | Defaults to `service_account.json`. Compose overrides this with the mounted secret path. |
