@@ -11,8 +11,8 @@ appropriate for a club bot and gives each feature a clear home.
 | `config.py` | Configuration loading and validation. Token values are excluded from settings representations. |
 | `checks.py` | Officer-role authorization. Missing settings and direct messages fail closed. |
 | `errors.py` | Private error responses before/after interaction deferral. Raw API responses are not shown to users. |
-| `sheets.py` | Synchronous read-only Google API calls and officer lookup. |
-| `cogs/reminders.py` | Task filtering, task views, reminder formatting/delivery. |
+| `sheets.py` | Synchronous Google Sheets calls: task and officer reads, officer lookup, and appending new task rows. |
+| `cogs/reminders.py` | Task filtering, task views, task creation, reminder formatting/delivery. |
 | `cogs/announcements.py` | Announcement input validation and delivery. |
 | `cogs/emails.py` | Officer-only summaries, private pagination, concurrency lock, and cooldown. |
 | `gmail.py` | Bounded read-only Gmail selection and MIME parsing. |

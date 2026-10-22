@@ -5,6 +5,7 @@ import logging
 import asyncio
 import re
 from datetime import datetime, date, timedelta
+from urllib.parse import urlparse
 
 from sheets import SheetsClient
 from checks import is_officer
@@ -25,6 +26,15 @@ _OFFICER_SPLIT_RE = re.compile(r'[,\n;]+')
 # Discord embed description hard cap.
 _EMBED_DESC_LIMIT = 4096
 
+# Dropdown options on the Tasks tab. /create-task offers exactly these, so
+# update them when the tracker's dropdowns change.
+TEAMS = ("Executive", "Activities", "Marketing", "Workshops", "Finance", "Design", "Development")
+STATUSES = ("Not Started", "In Progress", "Completed")
+DEFAULT_STATUS = "Not Started"
+
+# User mentions typed into a text option arrive as <@id>, or <@!id> from older clients.
+_USER_MENTION_RE = re.compile(r'<@!?(\d+)>')
+
 
 def _parse_due_date(raw):
     """Try a handful of common date formats. Returns a date or None."""
@@ -43,6 +53,19 @@ def _split_officers(raw):
     if not raw:
         return []
     return [n.strip() for n in _OFFICER_SPLIT_RE.split(str(raw)) if n.strip()]
+
+
+def _parse_officer_mentions(raw):
+    """Discord IDs from user @mentions, in order without repeats. None if anything else was typed."""
+    ids = list(dict.fromkeys(_USER_MENTION_RE.findall(raw)))
+    if not ids or not re.fullmatch(r'[\s,;]*', _USER_MENTION_RE.sub('', raw)):
+        return None
+    return ids
+
+
+def _is_web_link(raw):
+    parsed = urlparse(raw)
+    return parsed.scheme in ("http", "https") and bool(parsed.netloc) and not re.search(r'\s', raw)
 
 
 def _row_is_pending(row):
@@ -396,6 +419,98 @@ class Reminders(commands.Cog):
 
     @all_tasks.error
     async def all_tasks_error(self, interaction, error):
+        await respond_error(interaction, error)
+
+    # ---------- /create-task ----------
+
+    @app_commands.command(
+        name="create-task",
+        description="Add a task to the end of the F26 Tracker.",
+    )
+    @app_commands.describe(
+        task="The task description",
+        priority="Due date as MM/DD/YY",
+        team="The team responsible for the task",
+        officer="@ the officer(s) responsible for the task",
+        status="Defaults to Not Started",
+        link="Optional link starting with http:// or https://",
+        notes="Optional notes",
+    )
+    @app_commands.choices(
+        team=[app_commands.Choice(name=team, value=team) for team in TEAMS],
+        status=[app_commands.Choice(name=status, value=status) for status in STATUSES],
+    )
+    @is_officer()
+    async def create_task(
+        self,
+        interaction: discord.Interaction,
+        task: app_commands.Range[str, 1, 256],
+        priority: str,
+        team: app_commands.Choice[str],
+        officer: str,
+        status: app_commands.Choice[str] = None,
+        link: app_commands.Range[str, 1, 1024] = None,
+        notes: app_commands.Range[str, 1, 1024] = None,
+    ):
+        task = task.strip()
+        link = (link or "").strip()
+        notes = (notes or "").strip()
+        due_date = _parse_due_date(priority)
+        officer_ids = _parse_officer_mentions(officer)
+
+        problem = None
+        if not task:
+            problem = "The task description can't be blank."
+        elif due_date is None:
+            problem = "Priority must be a due date in MM/DD/YY format, such as 10/31/26."
+        elif not officer_ids:
+            problem = "Tag officers with @mentions picked from Discord's suggestions, such as @Thalia @Nicholas."
+        elif link and not _is_web_link(link):
+            problem = "Link must be a full URL starting with http:// or https://."
+        if problem:
+            await interaction.response.send_message(problem, ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+        async with self._sheets_lock:
+            names = await asyncio.to_thread(self.sheets_client.get_officer_names)
+        unknown = [i for i in officer_ids if i not in names]
+        if unknown:
+            await interaction.followup.send(
+                "Not on the Officer List: " + ", ".join(f"<@{i}>" for i in unknown)
+                + ". Add them with their Discord ID there, or tag a different officer.",
+                ephemeral=True,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            return
+
+        fields = {
+            "Task": task,
+            "Priority": due_date,
+            "Team": team.value,
+            "Officer": ", ".join(names[i] for i in officer_ids),
+            "Status": status.value if status else DEFAULT_STATUS,
+            "Link": link,
+            "Notes": notes,
+        }
+        async with self._sheets_lock:
+            row_number = await asyncio.to_thread(self.sheets_client.append_task, fields)
+
+        embed = discord.Embed(title="Task added", description=f"**{task}**", color=discord.Color.green())
+        embed.add_field(name="Due", value=due_date.strftime("%b %d, %Y"))
+        embed.add_field(name="Team", value=fields["Team"])
+        embed.add_field(name="Status", value=fields["Status"])
+        embed.add_field(name="Officers", value=fields["Officer"], inline=False)
+        if link:
+            embed.add_field(name="Link", value=link, inline=False)
+        if notes:
+            embed.add_field(name="Notes", value=notes, inline=False)
+        embed.set_footer(text=f"Added as row {row_number} of the Tasks tab. Only you can see this message.")
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+    @create_task.error
+    async def create_task_error(self, interaction, error):
         await respond_error(interaction, error)
 
 
