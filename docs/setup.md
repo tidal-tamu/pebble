@@ -41,6 +41,56 @@ To enable `/assign-role`, copy the Judge, Mentor, and Hacker role IDs into
 Grant the bot Manage Roles and place its highest role above those three roles.
 The command accepts only those participant roles and requires the Officer role.
 
+## Hacker reaction roles
+
+1. Create an unmanaged Hacker role with **all server permission switches off**.
+   It must not be the Officer role. Remove any channel/category overrides that
+   grant permissions to Hacker; deny-only overrides are allowed. Other roles
+   and `@everyone` can still give members their normal server access.
+2. Put its ID in `HACKER_ROLE_ID` and restart Pebble.
+3. Give Pebble Manage Roles and put its highest role above Hacker. In the panel
+   channel, grant Pebble View Channel, Read Message History, and Add Reactions,
+   plus Send Messages if it will create a message. Members need View Channel,
+   Read Message History, and access to react there. Custom emoji must be usable
+   by Pebble and the members.
+4. As an Officer, run `/reaction-role channel:#roles emoji:💻`. Pebble creates
+   the message and adds the initial reaction. To use an existing message,
+   include `message_id:MESSAGE_ID` from the selected channel. It can have been
+   posted before Pebble started, including by someone else. For an existing
+   message, make sure its text explains that removing the reaction removes Hacker.
+5. Test with a member who lacks Hacker: react to gain the role, then remove the
+   reaction to lose it. Other emoji and messages are ignored. Normal reactions
+   and super reactions both count; the role stays while either exists.
+
+There is one active message/emoji mapping per server. Running the command again
+replaces it. Selections follow the new message: previously tracked members who
+have not reacted there lose Hacker. Existing reactions on the new message count
+immediately. Do not change `HACKER_ROLE_ID` for an active panel: Pebble stops
+processing that panel if the configured ID changes, rather than silently
+granting or removing a different role.
+
+The only permitted self-selection role is `HACKER_ROLE_ID`. There is no role
+input on this command. Pebble fetches current role permissions and channel
+overrides before syncing and again before each grant. A permission change,
+managed role, deleted role, or insufficient bot hierarchy blocks processing and
+produces an actionable error log. If Hacker later acquires permissions, remove
+them before processing can resume; review any existing holders separately.
+
+Configuration and tracked selections are saved in `REACTION_ROLES_DB`, defaulting
+to `data/reaction_roles.sqlite3`. Its directory must be writable by Pebble.
+Compose mounts the `pebble_data` named volume at `/app/data`; keep that volume
+when rebuilding or recreating the container. Do not use `docker compose down -v`
+if you want to preserve selections. Back up the database while the bot is stopped.
+
+Raw reaction events work without Discord's message cache. At startup, on gateway
+resume, and every five minutes, Pebble reconciles current reactions with tracked
+selections. This recovers offline additions/removals and retries transient role
+failures. Removing all reactions also removes tracked Hacker roles. Members who
+were never tracked by the panel keep manually assigned Hacker roles. Once a
+member uses the panel, their reaction controls that role, including an existing
+Hacker role they already held. A deleted/inaccessible panel logs an error and
+preserves roles until an Officer configures an accessible message.
+
 ## Google service account
 
 1. Select/create a project in [Google Cloud Console](https://console.cloud.google.com/).

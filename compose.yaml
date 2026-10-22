@@ -6,6 +6,9 @@ services:
     env_file: .env
     environment:
       GOOGLE_CREDENTIALS_FILE: /run/secrets/google_credentials
+      REACTION_ROLES_DB: /app/data/reaction_roles.sqlite3
+    volumes:
+      - pebble_data:/app/data
     secrets:
       - google_credentials
     logging:
@@ -17,3 +20,6 @@ services:
 secrets:
   google_credentials:
     file: ./service_account.json
+
+volumes:
+  pebble_data:

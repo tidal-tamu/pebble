@@ -5,6 +5,7 @@
 !.env.example
 *.json
 secrets
+data
 .venv
 venv
 env

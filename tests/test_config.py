@@ -34,6 +34,11 @@ class ConfigurationTests(unittest.TestCase):
     def test_credentials_are_relative_to_repository(self):
         self.assertEqual(settings().credentials_file, ROOT / "service_account.json")
 
+    def test_reaction_role_database_path(self):
+        self.assertEqual(settings().reaction_roles_db, ROOT / "data" / "reaction_roles.sqlite3")
+        self.assertEqual(settings(REACTION_ROLES_DB="custom/roles.db").reaction_roles_db, ROOT / "custom" / "roles.db")
+        self.assertEqual(str(settings(REACTION_ROLES_DB="/tmp/roles.db").reaction_roles_db), "/tmp/roles.db")
+
     def test_token_is_not_in_settings_repr(self):
         self.assertNotIn("test-token", repr(settings()))
 

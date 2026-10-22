@@ -7,6 +7,7 @@ pebble_gmail.json
 gmail_token.json
 gmail_client.json
 secrets/
+data/
 # Host-specific resource limits; kept alongside the shared droplet deployment.
 /compose.override.yaml
 

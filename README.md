@@ -6,7 +6,8 @@ announcements. Run one instance locally or in Docker on a server.
 
 ## Commands
 
-All commands require the configured Officer role and run inside a Discord server.
+All slash commands require the configured Officer role and run inside a Discord
+server. Members can use the configured Hacker reaction panel without being Officers.
 
 | Command | Behavior |
 | --- | --- |
@@ -17,11 +18,18 @@ All commands require the configured Officer role and run inside a Discord server
 | `/summarize-emails` | Privately summarizes `24h` or `7d` conversations. Disabled by default; supports a fictional demo and explicitly configured live mode. |
 | `/registration-stats` | Posts live Harp registration totals and counts by status in the channel. |
 | `/assign-role user role` | Assigns an existing judge, mentor, or hacker role to a server member. Only those three choices are accepted. |
+| `/reaction-role channel [emoji] [message_id]` | Creates a Hacker self-selection panel, or configures an existing message in the chosen channel. Defaults to 💻. |
 
 For `/assign-role`, set `JUDGE_ROLE_ID`, `MENTOR_ROLE_ID`, and `HACKER_ROLE_ID`
 to the corresponding server role IDs and restart the bot. The bot needs **Manage
 Roles**, with its highest role above all three roles. Replies are private, existing
 roles are preserved, and this command cannot grant the configured Officer role.
+
+For Hacker self-selection, see [reaction-role setup](docs/setup.md#hacker-reaction-roles).
+Reacting grants Hacker; removing the reaction removes Hacker. Only the configured
+`HACKER_ROLE_ID` is eligible, and it must have **zero server permissions and no
+channel permission grants**. Judge, Mentor, Officer, and arbitrary roles are not
+self-selection choices. There is one active panel and one emoji mapping per server.
 
 `/registration-stats` shows submitted applications prominently. Applications
 started includes drafts; submitted includes every non-draft status. Set
@@ -75,6 +83,7 @@ variables override `.env`, and relative credential paths resolve from the repo.
 | `SPREADSHEET_ID` | Yes | Spreadsheet ID between `/d/` and `/edit`; not the full URL. |
 | `OFFICER_ROLE_ID` | Yes | Role allowed to invoke the commands. |
 | `JUDGE_ROLE_ID`, `MENTOR_ROLE_ID`, `HACKER_ROLE_ID` | For role assignment | Existing server roles allowed by `/assign-role`. An unset role cannot be assigned. |
+| `REACTION_ROLES_DB` | No | SQLite file for persistent Hacker panels and selections. Defaults to `data/reaction_roles.sqlite3`. Compose stores it in a named volume. |
 | `REMINDER_CHANNEL_ID` | Yes | Channel receiving task reminders. |
 | `GUILD_ID` | No | Server for immediate guild-scoped command registration. Leave blank for global registration. |
 | `GOOGLE_CREDENTIALS_FILE` | No | Defaults to `service_account.json`. Compose overrides this with the mounted secret path. |
@@ -127,9 +136,8 @@ role is denied. Avoid reminder testing against a full tracker of real assignees.
 - [Gmail authorization setup](docs/gmail.md)
 
 Manual email summaries are available through `/summarize-emails`; see the Gmail
-guide for mode selection and setup. Daily digests and reaction roles remain
+guide for mode selection and setup. Daily digests remain
 planned. Local Gmail authorization and a Gemini preview
 using fictional threads are also available.
-The current bot uses Sheets as its source of truth and has no
-local database. Add persistent storage when a feature needs saved mappings or
-job history, rather than storing that state only in memory.
+Task tracking uses Sheets as its source of truth. Hacker reaction panels and
+selections use SQLite; preserve the database across deployments and backups.

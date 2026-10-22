@@ -33,6 +33,7 @@ class Settings:
     judge_role_id: int | None = None
     mentor_role_id: int | None = None
     hacker_role_id: int | None = None
+    reaction_roles_db: Path = ROOT / "data" / "reaction_roles.sqlite3"
 
     @classmethod
     def from_env(cls):
@@ -75,6 +76,9 @@ class Settings:
         gemini_key = values.get("GEMINI_API_KEY", "").strip()
         gemini_model = values.get("GEMINI_MODEL", "gemini-3.5-flash-lite").strip()
         gmail_account = values.get("GMAIL_EXPECTED_ACCOUNT", "").strip().lower()
+        reaction_roles_db = Path(values.get("REACTION_ROLES_DB", "data/reaction_roles.sqlite3"))
+        if not reaction_roles_db.is_absolute():
+            reaction_roles_db = ROOT / reaction_roles_db
         if email_mode != "disabled":
             if not gemini_key or gemini_key.startswith("your_"):
                 raise ConfigurationError("Set GEMINI_API_KEY before enabling email summaries.")
@@ -99,4 +103,5 @@ class Settings:
             judge_role_id=discord_id("JUDGE_ROLE_ID", optional=True),
             mentor_role_id=discord_id("MENTOR_ROLE_ID", optional=True),
             hacker_role_id=discord_id("HACKER_ROLE_ID", optional=True),
+            reaction_roles_db=reaction_roles_db,
         )

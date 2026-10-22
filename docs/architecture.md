@@ -15,6 +15,8 @@ appropriate for a club bot and gives each feature a clear home.
 | `cogs/reminders.py` | Task filtering, task views, reminder formatting/delivery. |
 | `cogs/announcements.py` | Announcement input validation and delivery. |
 | `cogs/emails.py` | Officer-only summaries, private pagination, concurrency lock, and cooldown. |
+| `cogs/reaction_roles.py` | Officer panel setup, raw reactions, strict Hacker-only permission checks, and reconciliation. |
+| `reaction_roles.py` | SQLite panel configuration and tracked selections; calls run in worker threads. |
 | `gmail.py` | Bounded read-only Gmail selection and MIME parsing. |
 | `gemini.py` | Structured digest generation and validation of source references. |
 | `email_summary.py` | Demo/live orchestration, bounded batching, and safe Discord formatting. |
@@ -61,7 +63,7 @@ does not require an application framework.
 
 | Feature | Initial delivery | Additional requirements |
 | --- | --- | --- |
-| Reaction roles | Officer-created message with emoji/role mappings | Persist mappings; handle uncached messages; decide removal behavior; enforce role hierarchy and assignable-role limits. |
+| Reaction roles | Hacker-only panel implemented with persistent configuration and raw events | Additional role types require an explicit policy change; zero-permission roles only. |
 | Registration counts | Officer command fetching aggregate counts | Authenticated API contract, timeout/retry policy, definition of count, and freshness timestamp. |
 | Gmail + Gemini digest | Manual private command implemented; demo/live opt-in | Daily scheduling, persistent progress/deduplication, and evaluation on permitted real correspondence remain future work. |
 
@@ -70,9 +72,12 @@ after downtime. Record completed runs in persistent storage and define retry
 semantics. Sending a Discord message and recording its completion are not one
 atomic operation, so exactly-once delivery needs a deliberate design.
 
-For a single droplet, SQLite with a mounted data directory is a suitable starting
-point when persisted state is needed. Consider a shared database and distributed
-job coordination only if multiple processes become a real requirement.
+Hacker reaction roles use SQLite in a mounted data directory. A process-local
+lock serializes panel setup and synchronization. Current reactions are read
+before modifying memberships; subscriptions are recorded before grants and
+forgotten only after successful removals. Startup and five-minute reconciliation
+recover downtime and retries. Run one Pebble instance per database. Consider a
+shared database and distributed coordination if multiple processes are needed.
 
 ## Dependencies and checks
 
