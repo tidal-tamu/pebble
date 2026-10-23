@@ -85,7 +85,10 @@ if you want to preserve selections. Back up the database while the bot is stoppe
 Raw reaction events work without Discord's message cache. At startup, on gateway
 resume, and every five minutes, Pebble reconciles current reactions with tracked
 selections. This recovers offline additions/removals and retries transient role
-failures. Removing all reactions also removes tracked Hacker roles. Members who
+failures. Individual reaction additions/removals check only the affected member's
+current normal and super reactions, without listing all reactors or fetching all
+members. Clearing all reactions or the configured emoji triggers a full check
+and removes tracked Hacker roles when neither reaction type remains. Members who
 were never tracked by the panel keep manually assigned Hacker roles. Once a
 member uses the panel, their reaction controls that role, including an existing
 Hacker role they already held. A deleted/inaccessible panel logs an error and

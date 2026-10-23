@@ -49,6 +49,11 @@ class ReactionRoleStore:
         with self._connect() as db:
             return {row[0] for row in db.execute("SELECT user_id FROM selections WHERE guild_id = ?", (guild_id,))}
 
+    def is_tracked(self, guild_id, user_id):
+        with self._connect() as db:
+            return db.execute("SELECT 1 FROM selections WHERE guild_id = ? AND user_id = ?",
+                              (guild_id, user_id)).fetchone() is not None
+
     def track(self, guild_id, user_id):
         # Record before assigning so a crash cannot leave an untracked grant.
         with self._connect() as db:

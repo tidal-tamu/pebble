@@ -141,7 +141,20 @@ class ReactionRoles(commands.Cog):
         hint = str(error) if isinstance(error, PanelError) else self._failure_hint(error)
         logger.error("Reaction roles %s guild=%s (%s): %s", operation, guild_id, type(error).__name__, hint)
 
-    async def _sync_panel(self, panel):
+    @staticmethod
+    async def _member_selected(reaction, user_id):
+        if reaction is None:
+            return False
+        # Discord sorts reactors by user ID. Query only the first user at or
+        # above this ID, for each reaction type, rather than listing everyone.
+        after = discord.Object(id=user_id - 1)
+        for kind in (discord.ReactionType.normal, discord.ReactionType.burst):
+            async for user in reaction.users(limit=1, after=after, type=kind):
+                if user.id == user_id and not user.bot:
+                    return True
+        return False
+
+    async def _sync_panel(self, panel, user_id=None):
         guild = self.bot.get_guild(panel.guild_id)
         if guild is None:
             raise PanelError("Server unavailable; check that Pebble is still a member and the server is online.")
@@ -150,12 +163,18 @@ class ReactionRoles(commands.Cog):
         self._validate_channel(channel)
         message = await channel.fetch_message(panel.message_id)
         reaction = next((r for r in message.reactions if emoji_key(r.emoji) == panel.emoji), None)
-        # Fully enumerate before removing anything; failed pagination must not remove roles.
-        selected = set()
-        if reaction:
-            for kind in (discord.ReactionType.normal, discord.ReactionType.burst):
-                selected.update({user.id async for user in reaction.users(limit=None, type=kind) if not user.bot})
-        tracked = await asyncio.to_thread(self.store.selected, panel.guild_id)
+        if user_id is None:
+            # Fully enumerate before removing anything; failed pagination must not remove roles.
+            selected = set()
+            if reaction:
+                for kind in (discord.ReactionType.normal, discord.ReactionType.burst):
+                    selected.update({user.id async for user in reaction.users(limit=None, type=kind) if not user.bot})
+            tracked = await asyncio.to_thread(self.store.selected, panel.guild_id)
+        else:
+            # Read current reactions even for removal events: the other reaction
+            # type may remain, or a newer event may have overtaken this one.
+            selected = {user_id} if await self._member_selected(reaction, user_id) else set()
+            tracked = {user_id} if await asyncio.to_thread(self.store.is_tracked, panel.guild_id, user_id) else set()
         for user_id in selected | tracked:
             try:
                 # Fetch members for uncached removal events and fresh role membership.
@@ -177,13 +196,13 @@ class ReactionRoles(commands.Cog):
             except discord.HTTPException as error:
                 self._log_failure(f"update member={user_id} message={panel.message_id}", panel.guild_id, error)
 
-    async def _run_panel(self, panel):
+    async def _run_panel(self, panel, user_id=None):
         async with self._lock:
             try:
                 # A command may have replaced the configuration while this event waited.
                 if panel not in await asyncio.to_thread(self.store.panels):
                     return
-                await self._sync_panel(panel)
+                await self._sync_panel(panel, user_id)
             except FAILURES as error:
                 self._log_failure(f"sync message={panel.message_id}", panel.guild_id, error)
 
@@ -200,7 +219,7 @@ class ReactionRoles(commands.Cog):
                 continue
             if hasattr(payload, "emoji") and emoji_key(payload.emoji) != panel.emoji:
                 continue
-            await self._run_panel(panel)
+            await self._run_panel(panel, getattr(payload, "user_id", None))
 
     @commands.Cog.listener()
     async def on_raw_reaction_add(self, payload):

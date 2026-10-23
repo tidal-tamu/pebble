@@ -1,3 +1,4 @@
+import asyncio
 from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -28,10 +29,14 @@ class StoreTests(unittest.TestCase):
             reopened.initialize()
             self.assertEqual(reopened.panels(), [panel])
             self.assertEqual(reopened.selected(1), {5})
+            self.assertTrue(reopened.is_tracked(1, 5))
+            self.assertFalse(reopened.is_tracked(1, 6))
+            self.assertFalse(reopened.is_tracked(2, 5))
             reopened.save(replace(panel, message_id=6))
             self.assertEqual(reopened.panels(), [replace(panel, message_id=6)])
             reopened.forget(1, 5)
             self.assertEqual(reopened.selected(1), set())
+            self.assertFalse(reopened.is_tracked(1, 5))
 
 
 class ReactionRoleTests(unittest.IsolatedAsyncioTestCase):
@@ -52,7 +57,10 @@ class ReactionRoleTests(unittest.IsolatedAsyncioTestCase):
 
         async def users(**kwargs):
             source = self.burst_reactors if kwargs["type"] == discord.ReactionType.burst else self.reactors
-            for user in source:
+            after = kwargs.get("after")
+            result = sorted((user for user in source if after is None or user.id > after.id), key=lambda user: user.id)
+            limit = kwargs.get("limit")
+            for user in result if limit is None else result[:limit]:
                 yield user
 
         self.reaction = SimpleNamespace(emoji="💻", users=Mock(side_effect=users))
@@ -117,6 +125,116 @@ class ReactionRoleTests(unittest.IsolatedAsyncioTestCase):
         await self.cog.on_raw_reaction_remove(self.payload)
         self.member.add_roles.assert_not_awaited()
         self.member.remove_roles.assert_not_awaited()
+
+    async def test_individual_events_fetch_only_the_affected_member(self):
+        # A large panel must not turn ten events into a thousand member fetches.
+        self.reactors.extend(SimpleNamespace(id=user_id, bot=False) for user_id in range(2000, 2100))
+        self.reactors.append(self.member)
+        self.cog.store.track(789, 555)
+        self.member.roles = [self.role]
+        with patch.object(self.cog.store, "selected", side_effect=AssertionError("Full scan on individual event")):
+            for _ in range(10):
+                await self.cog.on_raw_reaction_add(self.payload)
+        self.assertEqual(self.guild.fetch_member.await_count, 10)
+        self.assertTrue(all(call.args == (222,) for call in self.guild.fetch_member.await_args_list))
+        self.assertTrue(all(call.kwargs["limit"] == 1 and call.kwargs["after"].id == 221
+                            for call in self.reaction.users.call_args_list))
+        self.assertEqual(self.cog.store.selected(789), {222, 555})
+        self.member.remove_roles.assert_not_awaited()
+
+    async def test_removal_keeps_role_while_either_reaction_type_remains(self):
+        self.member.roles = [self.role]
+        self.cog.store.track(789, 222)
+        for remaining in (self.reactors, self.burst_reactors):
+            remaining.append(self.member)
+            await self.cog.on_raw_reaction_remove(self.payload)
+            self.member.remove_roles.assert_not_awaited()
+            self.assertEqual(self.cog.store.selected(789), {222})
+            remaining.clear()
+        await self.cog.on_raw_reaction_remove(self.payload)
+        self.member.remove_roles.assert_awaited_once()
+        self.assertEqual(self.cog.store.selected(789), set())
+
+    async def test_next_reactor_does_not_select_the_affected_member(self):
+        self.cog.store.track(789, 222)
+        self.member.roles = [self.role]
+        self.reactors.extend([SimpleNamespace(id=221, bot=False), SimpleNamespace(id=223, bot=False)])
+        await self.cog.on_raw_reaction_remove(self.payload)
+        self.member.remove_roles.assert_awaited_once()
+        self.member.add_roles.assert_not_awaited()
+        self.guild.fetch_member.assert_awaited_once_with(222)
+
+    async def test_member_lookup_uses_bounded_discord_requests_for_both_types(self):
+        def user_data(user_id):
+            return {"id": str(user_id), "username": "tester", "discriminator": "0", "avatar": None, "bot": False}
+
+        http = SimpleNamespace(get_reaction_users=AsyncMock(side_effect=[[user_data(223)], [user_data(222)]]))
+        message = SimpleNamespace(id=333, guild=None, channel=self.channel, _state=SimpleNamespace(http=http))
+        reaction = discord.Reaction(message=message, data={"count": 101, "me": True}, emoji="💻")
+        self.assertTrue(await self.cog._member_selected(reaction, 222))
+        self.assertEqual(http.get_reaction_users.await_count, 2)
+        for call, kind in zip(http.get_reaction_users.await_args_list,
+                              (discord.ReactionType.normal, discord.ReactionType.burst)):
+            self.assertEqual(call.args, (444, 333, "💻", 1))
+            self.assertEqual(call.kwargs, {"after": 221, "type": kind.value})
+
+    async def test_untracked_manual_role_is_preserved_on_individual_removal(self):
+        self.member.roles = [self.role]
+        await self.cog.on_raw_reaction_remove(self.payload)
+        self.member.remove_roles.assert_not_awaited()
+        self.guild.fetch_member.assert_not_awaited()
+
+    async def test_rapid_queued_events_follow_latest_reactions(self):
+        self.cog.store.track(789, 222)
+        self.member.roles = [self.role]
+        waiting = asyncio.Event()
+        original_run = self.cog._run_panel
+        started = 0
+
+        async def run_when_unlocked(*args):
+            nonlocal started
+            started += 1
+            if started == 2:
+                waiting.set()
+            await original_run(*args)
+
+        with patch.object(self.cog, "_run_panel", side_effect=run_when_unlocked):
+            async with self.cog._lock:
+                pending = [asyncio.create_task(self.cog.on_raw_reaction_add(self.payload)),
+                           asyncio.create_task(self.cog.on_raw_reaction_remove(self.payload))]
+                await asyncio.wait_for(waiting.wait(), timeout=5)
+                # Both handlers must inspect state after acquiring the lock.
+                self.burst_reactors.append(self.member)
+            await asyncio.gather(*pending)
+        self.member.add_roles.assert_not_awaited()
+        self.member.remove_roles.assert_not_awaited()
+        self.assertEqual(self.cog.store.selected(789), {222})
+
+    async def test_failed_individual_reaction_lookup_preserves_roles_and_tracking(self):
+        self.cog.store.track(789, 222)
+        self.member.roles = [self.role]
+
+        async def failed_users(**kwargs):
+            for user in self.reactors:
+                yield user
+            if kwargs["type"] == discord.ReactionType.burst:
+                raise discord.HTTPException(SimpleNamespace(status=500, reason="Failed"), "failed")
+
+        self.reaction.users.side_effect = failed_users
+        with self.assertLogs("cogs.reaction_roles", level="ERROR"):
+            await self.cog.on_raw_reaction_remove(self.payload)
+        self.member.remove_roles.assert_not_awaited()
+        self.assertEqual(self.cog.store.selected(789), {222})
+
+    async def test_recovery_still_updates_all_selected_and_tracked_members(self):
+        other = SimpleNamespace(id=555, bot=False, roles=[self.role], add_roles=AsyncMock(), remove_roles=AsyncMock())
+        self.guild.fetch_member.side_effect = lambda user_id: {222: self.member, 555: other}[user_id]
+        self.reactors.append(self.member)
+        self.cog.store.track(789, 555)
+        await self.cog.reconcile()
+        self.member.add_roles.assert_awaited_once()
+        other.remove_roles.assert_awaited_once()
+        self.assertEqual(self.cog.store.selected(789), {222})
 
     async def test_bulk_clear_removes_tracked_roles_only(self):
         self.cog.store.track(789, 222)

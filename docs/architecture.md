@@ -73,9 +73,11 @@ semantics. Sending a Discord message and recording its completion are not one
 atomic operation, so exactly-once delivery needs a deliberate design.
 
 Hacker reaction roles use SQLite in a mounted data directory. A process-local
-lock serializes panel setup and synchronization. Current reactions are read
-before modifying memberships; subscriptions are recorded before grants and
-forgotten only after successful removals. Startup and five-minute reconciliation
+lock serializes panel setup and synchronization. Individual reaction events use
+bounded user-ID queries for normal and super reactions and update only the
+affected member. Setup, bulk clears, and recovery reconcile the whole panel.
+Current reactions are read before modifying memberships; subscriptions are
+recorded before grants and forgotten only after successful removals. Startup and five-minute reconciliation
 recover downtime and retries. Run one Pebble instance per database. Consider a
 shared database and distributed coordination if multiple processes are needed.
 
