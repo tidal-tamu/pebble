@@ -14,6 +14,7 @@ RUN pip install --no-cache-dir -r requirements.lock
 
 # Copy the current directory contents into the container at /app
 RUN useradd --create-home --uid 10001 pebble
+RUN mkdir /app/data && chown pebble:pebble /app/data
 COPY --chown=pebble:pebble *.py ./
 COPY --chown=pebble:pebble cogs ./cogs
 USER pebble
