@@ -24,3 +24,6 @@ env/
 # Editors
 .vscode/
 .idea/
+
+# Claude Code personal settings; shared .claude/settings.json stays committable.
+.claude/settings.local.json

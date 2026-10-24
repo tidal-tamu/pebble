@@ -64,7 +64,10 @@ def _parse_officer_mentions(raw):
 
 
 def _is_web_link(raw):
-    parsed = urlparse(raw)
+    try:
+        parsed = urlparse(raw)
+    except ValueError:
+        return False
     return parsed.scheme in ("http", "https") and bool(parsed.netloc) and not re.search(r'\s', raw)
 
 
