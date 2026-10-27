@@ -10,9 +10,9 @@ from discord import app_commands
 
 from checks import is_officer
 from cogs.announcements import Announcements
-from cogs.reminders import Reminders, _parse_due_date, _row_is_pending, _split_officers, _join_lines_for_embed
+from cogs.reminders import Reminders, _parse_due_date, _row_is_pending, _split_officers, _join_lines_for_embed, _task_choice
 from errors import respond_error
-from sheets import SheetsError
+from sheets import SheetsError, task_key
 from tests.helpers import settings
 
 
@@ -151,3 +151,107 @@ class CommandTests(unittest.IsolatedAsyncioTestCase):
         await cog.announce.callback(cog, request, channel, "x" * 257, "Message")
         channel.send.assert_not_called()
         request.response.send_message.assert_awaited_once()
+
+
+def tracker_row(task, officer="Jamie", status="Not Started"):
+    return {"Task": task, "Priority": "10/31/2026", "Team": "Activities", "Officer": officer, "Status": status, "Link": "", "Notes": ""}
+
+
+class CompleteTaskTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.bot = SimpleNamespace(settings=settings(), get_channel=Mock())
+        with patch("cogs.reminders.SheetsClient"):
+            self.cog = Reminders(self.bot)
+        self.sheets = self.cog.sheets_client
+        self.sheets.get_task_rows.return_value = [
+            (2, tracker_row("Book GBM room")),
+            (3, tracker_row("Order snacks", status="Completed")),
+            (4, tracker_row("Book GBM room", officer="Tanvee")),
+            (5, tracker_row("Print flyers", officer="Shruthika")),
+        ]
+
+    def request(self, officer=True):
+        request = interaction()
+        request.client = self.bot
+        request.user = Mock(spec=discord.Member)
+        request.user.roles = [SimpleNamespace(id=123)] if officer else []
+        request.response.is_done.return_value = False
+        request.response.autocomplete = AsyncMock()
+        return request
+
+    async def complete(self, selection):
+        request = self.request()
+        await self.cog.complete_task.callback(self.cog, request, selection)
+        return request
+
+    async def test_completes_the_picked_duplicate_and_confirms_privately(self):
+        picked = tracker_row("Book GBM room", officer="Tanvee")
+        request = await self.complete(_task_choice(4, picked).value)
+        request.response.defer.assert_awaited_once_with(ephemeral=True, thinking=True)
+        self.sheets.set_task_status.assert_called_once_with(4, task_key(picked), "Completed")
+        sent = request.followup.send.call_args.kwargs
+        self.assertTrue(sent["ephemeral"])
+        self.assertEqual(sent["embed"].description, "**Book GBM room**")
+        self.assertIn("row 4", sent["embed"].footer.text)
+
+    async def test_identical_copies_use_the_picked_row_and_moved_tasks_are_followed(self):
+        flyers = tracker_row("Print flyers", officer="Shruthika")
+        self.sheets.get_task_rows.return_value.append((6, flyers))
+        await self.complete(_task_choice(6, flyers).value)
+        self.sheets.set_task_status.assert_called_once_with(6, task_key(flyers), "Completed")
+
+        picked = tracker_row("Book GBM room", officer="Tanvee")
+        self.sheets.get_task_rows.return_value = [(2, tracker_row("Book GBM room")), (3, picked)]
+        self.sheets.set_task_status.reset_mock()
+        await self.complete(_task_choice(4, picked).value)
+        self.sheets.set_task_status.assert_called_once_with(3, task_key(picked), "Completed")
+
+    async def test_missing_ambiguous_and_completed_tasks_are_not_written(self):
+        edited = _task_choice(4, tracker_row("Book GBM room", officer="Tanvee") | {"Notes": "Old notes"}).value
+        self.sheets.get_task_rows.return_value.append((6, tracker_row("Print flyers", officer="Shruthika")))
+        moved_copy = _task_choice(9, tracker_row("Print flyers", officer="Shruthika")).value
+        cases = {
+            "Plan social": "No task in the tracker matches",
+            edited: "No task in the tracker matches",
+            "book gbm room": "2 tasks match",
+            moved_copy: "2 tasks match",
+            "Order snacks": "already marked Completed",
+        }
+        for selection, message in cases.items():
+            with self.subTest(selection=selection):
+                request = await self.complete(selection)
+                self.assertIn(message, request.followup.send.call_args.args[0])
+                self.assertTrue(request.followup.send.call_args.kwargs["ephemeral"])
+        self.sheets.set_task_status.assert_not_called()
+
+    async def test_sheets_failures_are_reported_privately_without_confirmation(self):
+        for method in (self.sheets.get_task_rows, self.sheets.set_task_status):
+            with self.subTest(method=method._mock_name):
+                method.side_effect = SheetsError("Couldn't update the task's status. Please try again.")
+                request = self.request()
+                with self.assertRaises(SheetsError) as failure:
+                    await self.cog.complete_task.callback(self.cog, request, "Print flyers")
+                request.response.is_done.return_value = True
+                await self.cog.complete_task_error(request, failure.exception)
+                request.followup.send.assert_awaited_once_with("Couldn't update the task's status. Please try again.", ephemeral=True)
+                method.side_effect = None
+
+    async def test_non_officers_get_a_private_denial_and_no_suggestions(self):
+        request = self.request(officer=False)
+        with self.assertRaises(app_commands.CheckFailure) as denied:
+            await self.cog.complete_task._invoke_with_namespace(request, SimpleNamespace(task="Print flyers"))
+        await self.cog.complete_task_error(request, denied.exception)
+        request.response.send_message.assert_awaited_once_with("You need the Officer role to use this command.", ephemeral=True)
+        await self.cog.complete_task._invoke_autocomplete(request, "task", SimpleNamespace(task=""))
+        request.response.autocomplete.assert_awaited_once_with([])
+        self.sheets.get_task_rows.assert_not_called()
+        self.sheets.set_task_status.assert_not_called()
+
+    async def test_suggestions_list_matching_pending_tasks_from_a_recent_read(self):
+        for current, expected in [("", [2, 4, 5]), ("tanvee", [4])]:
+            request = self.request()
+            await self.cog.complete_task._invoke_autocomplete(request, "task", SimpleNamespace(task=current))
+            choices = request.response.autocomplete.call_args.args[0]
+            self.assertEqual([int(choice.value.split(":")[0]) for choice in choices], expected)
+        self.assertEqual(choices[0].name, "Book GBM room (row 4 · due Oct 31 · Tanvee)")
+        self.sheets.get_task_rows.assert_called_once()

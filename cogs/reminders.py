@@ -4,10 +4,11 @@ from discord.ext import commands
 import logging
 import asyncio
 import re
+import time
 from datetime import datetime, date, timedelta
 from urllib.parse import urlparse
 
-from sheets import SheetsClient
+from sheets import SheetsClient, SheetsError, task_key
 from checks import is_officer
 from errors import respond_error
 
@@ -31,9 +32,21 @@ _EMBED_DESC_LIMIT = 4096
 TEAMS = ("Executive", "Activities", "Marketing", "Workshops", "Finance", "Design", "Development")
 STATUSES = ("Not Started", "In Progress", "Completed")
 DEFAULT_STATUS = "Not Started"
+COMPLETED_STATUS = "Completed"
 
 # User mentions typed into a text option arrive as <@id>, or <@!id> from older clients.
 _USER_MENTION_RE = re.compile(r'<@!?(\d+)>')
+
+# /complete-task suggestions carry "row:task_key" so the exact row picked can be found again.
+_TASK_CHOICE_RE = re.compile(r'(\d+):([0-9a-f]{16})')
+
+# Discord autocomplete caps.
+_CHOICE_LIMIT = 25
+_CHOICE_NAME_LIMIT = 100
+
+# Autocomplete fires as officers type, so suggestions reuse a recent read
+# rather than calling Google on every keystroke. /complete-task rereads anyway.
+_SUGGESTION_TTL_SECONDS = 30
 
 
 def _parse_due_date(raw):
@@ -76,6 +89,42 @@ def _row_is_pending(row):
     if status in DONE_STATUSES:
         return False
     return bool(str(row.get('Task', '')).strip())
+
+
+def _task_choice(row_number, row):
+    """Autocomplete choice for a task. The row number in the name tells duplicate descriptions apart."""
+    details = [f"row {row_number}"]
+    due_date = _parse_due_date(row.get('Priority'))
+    if due_date:
+        details.append(f"due {due_date.strftime('%b %d')}")
+    officers = _split_officers(row.get('Officer'))
+    if officers:
+        details.append(", ".join(officers))
+    suffix = f" ({' · '.join(details)})"
+    task = str(row.get('Task', '')).strip()
+    room = max(_CHOICE_NAME_LIMIT - len(suffix), 40)
+    if len(task) > room:
+        task = task[:room - 1] + "…"
+    return app_commands.Choice(
+        name=(task + suffix)[:_CHOICE_NAME_LIMIT],
+        value=f"{row_number}:{task_key(row)}",
+    )
+
+
+def _find_tasks(task_rows, selection):
+    """
+    [(row_number, row)] for the tasks `selection` names: a suggestion's value,
+    or a task description typed in full (ignoring case).
+    """
+    task_rows = [(n, row) for n, row in task_rows if str(row.get('Task', '')).strip()]
+    picked = _TASK_CHOICE_RE.fullmatch(selection.strip())
+    if picked:
+        row_number, key = int(picked[1]), picked[2]
+        same = [(n, row) for n, row in task_rows if task_key(row) == key]
+        # Prefer the row that was picked; otherwise follow the task to where it moved.
+        return [(n, row) for n, row in same if n == row_number] or same
+    wanted = selection.strip().casefold()
+    return [(n, row) for n, row in task_rows if str(row.get('Task', '')).strip().casefold() == wanted]
 
 
 def _render_task_line(row, include_officers=False):
@@ -171,6 +220,7 @@ class Reminders(commands.Cog):
         self.sheets_client = SheetsClient(bot.settings)
         self._sheets_lock = asyncio.Lock()
         self._sweep_lock = asyncio.Lock()
+        self._suggestion_cache = None  # (monotonic time, task rows) for autocomplete
 
     async def _read_tracker(self, include_officers=False):
         # gspread uses blocking HTTP. Serialize access to its shared session,
@@ -182,6 +232,15 @@ class Reminders(commands.Cog):
                 if include_officers else {}
             )
             return tasks_rows, officer_map
+
+    async def _suggestion_rows(self):
+        """Task rows for autocomplete, reread at most every _SUGGESTION_TTL_SECONDS."""
+        async with self._sheets_lock:
+            cache = self._suggestion_cache
+            if cache is None or time.monotonic() - cache[0] > _SUGGESTION_TTL_SECONDS:
+                rows = await asyncio.to_thread(self.sheets_client.get_task_rows)
+                self._suggestion_cache = cache = (time.monotonic(), rows)
+            return cache[1]
 
     def _get_reminder_channel(self):
         """Resolve the configured reminder channel, or (None, error_message)."""
@@ -514,6 +573,81 @@ class Reminders(commands.Cog):
 
     @create_task.error
     async def create_task_error(self, interaction, error):
+        await respond_error(interaction, error)
+
+    # ---------- /complete-task ----------
+
+    @app_commands.command(
+        name="complete-task",
+        description="Mark a task in the F26 Tracker as Completed.",
+    )
+    @app_commands.describe(task="Pick the task from the suggestions")
+    @is_officer()
+    async def complete_task(self, interaction: discord.Interaction, task: str):
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+        # Find the task in a fresh read rather than trusting the suggestion's
+        # row number, and hold the lock until the write finishes.
+        problem = None
+        async with self._sheets_lock:
+            self._suggestion_cache = None
+            matches = _find_tasks(await asyncio.to_thread(self.sheets_client.get_task_rows), task)
+            if not matches:
+                problem = "No task in the tracker matches that. It may have been edited or removed; pick one from the suggestions."
+            elif len(matches) > 1:
+                problem = f"{len(matches)} tasks match that. Pick the one you mean from the suggestions, which show each task's row."
+            else:
+                row_number, row = matches[0]
+                status = row.get('Status', '').strip()
+                if status.lower() in DONE_STATUSES:
+                    problem = f"**{row['Task'].strip()}** is already marked {status}."
+                else:
+                    await asyncio.to_thread(
+                        self.sheets_client.set_task_status, row_number, task_key(row), COMPLETED_STATUS
+                    )
+        if problem:
+            await interaction.followup.send(problem, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
+            return
+
+        embed = discord.Embed(title="Task completed", description=f"**{row['Task'].strip()}**", color=discord.Color.green())
+        due_date = _parse_due_date(row.get('Priority'))
+        if due_date:
+            embed.add_field(name="Due", value=due_date.strftime("%b %d, %Y"))
+        team = row.get('Team', '').strip()
+        if team:
+            embed.add_field(name="Team", value=team)
+        officers = _split_officers(row.get('Officer'))
+        if officers:
+            embed.add_field(name="Officers", value=", ".join(officers), inline=False)
+        embed.set_footer(text=f"Marked {COMPLETED_STATUS} in row {row_number} of the Tasks tab. Only you can see this message.")
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+    # Suggestions reveal tracker contents. Command checks don't cover
+    # autocomplete, so the callback gets its own; failing it suggests nothing.
+    @complete_task.autocomplete('task')
+    @is_officer()
+    async def complete_task_autocomplete(self, interaction: discord.Interaction, current: str):
+        try:
+            rows = await self._suggestion_rows()
+        except SheetsError:
+            return []
+
+        pending = sorted(
+            ((n, row) for n, row in rows if _row_is_pending(row)),
+            key=lambda item: (_parse_due_date(item[1].get('Priority')) or date.max, item[0]),
+        )
+        wanted = current.strip().casefold()
+        choices = []
+        for row_number, row in pending:
+            choice = _task_choice(row_number, row)
+            if wanted in choice.name.casefold():
+                choices.append(choice)
+                if len(choices) == _CHOICE_LIMIT:
+                    break
+        return choices
+
+    @complete_task.error
+    async def complete_task_error(self, interaction, error):
         await respond_error(interaction, error)
 
 
