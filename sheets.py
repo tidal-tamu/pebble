@@ -3,6 +3,8 @@ from gspread.exceptions import APIError
 from gspread.utils import ValueInputOption, rowcol_to_a1
 from google.oauth2.service_account import Credentials
 from datetime import date
+import hashlib
+import json
 import logging
 
 from config import ConfigurationError, Settings
@@ -27,6 +29,21 @@ def _typed(value):
     return "'" + value if value.startswith(("=", "+", "-", "@")) else value
 
 
+def _record(headers, cells):
+    """{header: cell text} for the labeled columns of one row."""
+    return {name: str(cells[i]) if i < len(cells) else "" for i, name in enumerate(headers) if name}
+
+
+def task_key(record):
+    """
+    A short fingerprint of a task row's cells other than Status. The tracker
+    has no ID column, so this is how a task picked from a list is recognized
+    again after rows move or its status changes.
+    """
+    cells = sorted((name, value.strip()) for name, value in record.items() if name != "Status")
+    return hashlib.sha256(json.dumps(cells).encode()).hexdigest()[:16]
+
+
 def _ambiguous_first_names(officers):
     """Lowercase first names shared by officers with different Discord IDs."""
     ids_by_first = {}
@@ -38,7 +55,8 @@ def _ambiguous_first_names(officers):
 class SheetsClient:
     def __init__(self, settings: Settings):
         self.scopes = [
-            # Write access is used only to append rows for /create-task.
+            # Write access is used only to append rows for /create-task and
+            # to set a task's Status cell for /complete-task.
             "https://www.googleapis.com/auth/spreadsheets",
             "https://www.googleapis.com/auth/drive.readonly",
         ]
@@ -122,6 +140,59 @@ class SheetsClient:
             logger.error("Adding a task failed (%s)", type(e).__name__)
             raise SheetsError("Couldn't add the task to the Tasks tab. Please try again.") from e
         return target
+
+    def get_task_rows(self, sheet_name=TASKS_SHEET):
+        """
+        Returns [(row_number, {header: text})] for every row below the header,
+        with cells as displayed. Row numbers shift when rows are inserted,
+        deleted, or sorted, so check task_key before relying on one later.
+        """
+        sheet = self.get_sheet(sheet_name)
+        try:
+            rows = sheet.get_all_values()
+        except Exception as e:
+            logger.error("Reading tasks failed (%s)", type(e).__name__)
+            raise SheetsError("Couldn't read the Tasks tab. Please try again.") from e
+        if not rows:
+            return []
+        headers = [str(cell).strip() for cell in rows[0]]
+        return [(n, _record(headers, row)) for n, row in enumerate(rows[1:], 2)]
+
+    def set_task_status(self, row_number, key, status, sheet_name=TASKS_SHEET):
+        """
+        Enters `status` in the Status cell of `row_number`, leaving the rest of
+        the row unchanged. Rereads the row first and writes nothing unless its
+        task_key still equals `key`.
+        """
+        sheet = self.get_sheet(sheet_name)
+        try:
+            header, row = sheet.batch_get(["1:1", f"{row_number}:{row_number}"])
+        except Exception as e:
+            logger.error("Reading tasks failed (%s)", type(e).__name__)
+            raise SheetsError("Couldn't read the Tasks tab. Please try again.") from e
+
+        headers = [str(cell).strip() for cell in (header[0] if header else [])]
+        if "Status" not in headers:
+            raise SheetsError("The Tasks header row is missing Status. Check row 1 of the tab.")
+        if task_key(_record(headers, row[0] if row else [])) != key:
+            raise SheetsError("That task moved or changed while I was updating it. Nothing was changed; please try again.")
+
+        try:
+            sheet.update(
+                [[_typed(status)]],
+                rowcol_to_a1(row_number, headers.index("Status") + 1),
+                value_input_option=ValueInputOption.user_entered,
+            )
+        except APIError as e:
+            logger.error("Updating a task failed (HTTP %s)", e.code)
+            if e.code == 403:
+                raise SheetsError(
+                    "I can't edit the tracker. Share it with the service account's email as an Editor."
+                ) from e
+            raise SheetsError("Couldn't update the task's status. Please try again.") from e
+        except Exception as e:
+            logger.error("Updating a task failed (%s)", type(e).__name__)
+            raise SheetsError("Couldn't update the task's status. Please try again.") from e
 
     def _read_officers(self, sheet_name):
         """Returns [(name, discord_id)] for Officer List rows that have both."""
