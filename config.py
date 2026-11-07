@@ -34,6 +34,7 @@ class Settings:
     mentor_role_id: int | None = None
     hacker_role_id: int | None = None
     reaction_roles_db: Path = ROOT / "data" / "reaction_roles.sqlite3"
+    harp_outreach_question_id: str = ""
 
     @classmethod
     def from_env(cls):
@@ -100,6 +101,7 @@ class Settings:
             gemini_api_key=gemini_key,
             gemini_model=gemini_model,
             harp_bot_api_key=values.get("HARP_BOT_API_KEY", "").strip(),
+            harp_outreach_question_id=values.get("HARP_OUTREACH_QUESTION_ID", "").strip(),
             judge_role_id=discord_id("JUDGE_ROLE_ID", optional=True),
             mentor_role_id=discord_id("MENTOR_ROLE_ID", optional=True),
             hacker_role_id=discord_id("HACKER_ROLE_ID", optional=True),

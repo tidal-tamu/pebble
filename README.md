@@ -17,6 +17,7 @@ server. Members can use the configured Hacker reaction panel without being Offic
 | `/announce` | Posts a titled announcement in a selected channel. The optional `ping_role` is literal mention text such as `<@&ROLE_ID>`. |
 | `/summarize-emails` | Privately summarizes `24h` or `7d` conversations. Disabled by default; supports a fictional demo and explicitly configured live mode. |
 | `/registration-stats` | Posts live Harp registration totals and counts by status in the channel. |
+| `/appstats outreach` | Posts the number of applicants who answered the outreach question and the breakdown by choice. |
 | `/assign-role user role` | Assigns an existing judge, mentor, or hacker role to a server member. Only those three choices are accepted. |
 | `/reaction-role channel [emoji] [message_id]` | Creates a Hacker self-selection panel, or configures an existing message in the chosen channel. Defaults to 💻. |
 
@@ -35,6 +36,17 @@ self-selection choices. There is one active panel and one emoji mapping per serv
 started includes drafts; submitted includes every non-draft status. Set
 `HARP_BOT_API_KEY` in the bot's server-side environment or untracked `.env`,
 restart the bot, then use the command in the club server with the Officer role.
+
+`/appstats outreach` uses the same key and posts aggregate counts in the channel.
+Confirm the live question field ID in Harp as a super admin by inspecting the
+`GET /v1/admin/applications/questions` response when opening **Forms → Application
+→ Overview**. The bundled field ID is `heard_about`. Set that live ID as
+`HARP_OUTREACH_QUESTION_ID` in Pebble and restart the bot. On Harp, set
+`BOT_API_SCOPES=registration:read,application_questions:read` and include the
+same field ID in the comma-separated `BOT_APPLICATION_QUESTION_IDS` allowlist.
+Percentages use the number of applicants who answered. Multiple selections can
+push the total above 100%, and respondents who picked retired choices still count
+toward the denominator.
 
 Reminders include overdue tasks, tasks due within seven days, and tasks without a
 recognized due date. `done` and `completed` statuses are skipped, ignoring case.
@@ -93,7 +105,8 @@ variables override `.env`, and relative credential paths resolve from the repo.
 | `GEMINI_MODEL` | No | Defaults to `gemini-3.5-flash-lite`. |
 | `GMAIL_TOKEN_FILE` | For live | Saved OAuth token; defaults to `secrets/gmail_token.json`. |
 | `GMAIL_EXPECTED_ACCOUNT` | For live | Mailbox identity that the saved Gmail token must match. |
-| `HARP_BOT_API_KEY` | For registration stats | Private bearer key for Harp's registration integration API. Leave blank to keep the command unavailable. |
+| `HARP_BOT_API_KEY` | For Harp commands | Private bearer key for Harp's integration API. |
+| `HARP_OUTREACH_QUESTION_ID` | For outreach stats | Live field ID for the outreach question, such as `heard_about`. |
 
 Tokens and credential keys are excluded from Git and the Docker build. Keep keys
 outside tracked files; `.gitignore` cannot protect a secret that was already committed.
@@ -106,7 +119,7 @@ config.py              Validated configuration
 checks.py              Shared Officer-role access check
 errors.py              Shared private command-error responses
 sheets.py              Google Sheets adapter and officer name resolution
-harp.py                Harp integration client and registration response parser
+harp.py                Harp integration client and response parsers
 cogs/                  Discord feature modules
 tests/                 Offline regression tests
 docs/                  Setup, deployment, and architecture guides

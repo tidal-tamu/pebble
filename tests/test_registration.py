@@ -1,11 +1,13 @@
 from types import SimpleNamespace
 import unittest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
+import discord
+from discord import app_commands
 import requests
 
-from cogs.registration import Registration
-from harp import HarpClient, HarpError, parse_registration_stats
+from cogs.registration import Registration, question_stats_embed
+from harp import HarpClient, HarpError, parse_question_stats, parse_registration_stats
 from tests.helpers import settings
 
 
@@ -14,6 +16,20 @@ PAYLOAD = {
         "total_started": 62,
         "total_submitted": 40,
         "by_status": {"draft": 22, "submitted": 40, "accepted": 0, "rejected": 0, "waitlisted": 0},
+    }
+}
+
+OUTREACH_PAYLOAD = {
+    "data": {
+        "question_id": "event_outreach",
+        "label": "How did you hear about us?",
+        "type": "multi_select",
+        "total_submitted": 210,
+        "answered": 184,
+        "options": [
+            {"value": "discord", "label": "Discord", "count": 76},
+            {"value": "friend", "label": "Friend", "count": 120},
+        ],
     }
 }
 
@@ -88,3 +104,62 @@ class RegistrationCommandTests(unittest.IsolatedAsyncioTestCase):
         for status, count in PAYLOAD["data"]["by_status"].items():
             self.assertIn(f"{status.title()}: **{count}**", embed.fields[1].value)
         self.assertNotIn("private-test-key", str(embed.to_dict()))
+
+
+class OutreachStatsTests(unittest.IsolatedAsyncioTestCase):
+    def test_zero_answers_and_retired_choices_use_harp_totals(self):
+        data = OUTREACH_PAYLOAD["data"]
+        for answered, count, expected in [(0, 0, "0.0%"), (184, 76, "41.3%")]:
+            with self.subTest(answered=answered):
+                options = [data["options"][0] | {"count": count}]
+                payload = {"data": data | {"answered": answered, "options": options}}
+                stats = parse_question_stats(payload, "event_outreach")
+                description = question_stats_embed(stats).description
+                self.assertIn(f"**{answered} of 210 answered**", description)
+                self.assertIn(f"Discord · {count} ({expected})", description)
+
+    @patch("harp.requests.get")
+    async def test_outreach_fetches_configured_question_and_posts_in_channel(self, get):
+        get.return_value.status_code = 200
+        get.return_value.json.return_value = OUTREACH_PAYLOAD
+        bot = SimpleNamespace(settings=settings(
+            HARP_BOT_API_KEY="private-test-key", HARP_OUTREACH_QUESTION_ID="event_outreach",
+        ))
+        cog = Registration(bot)
+        member = Mock(spec=discord.Member, roles=[SimpleNamespace(id=123)])
+        request = SimpleNamespace(
+            client=bot,
+            user=member,
+            response=SimpleNamespace(defer=AsyncMock()),
+            followup=SimpleNamespace(send=AsyncMock()),
+        )
+        command = cog.appstats.get_command("outreach")
+        await command._invoke_with_namespace(request, SimpleNamespace())
+        get.assert_called_once_with(
+            "https://portal.tidaltamu.com/v1/integrations/application/questions/event_outreach/stats",
+            headers={"Authorization": "Bearer private-test-key"},
+            timeout=5,
+        )
+        request.response.defer.assert_awaited_once_with(thinking=True)
+        sent = request.followup.send.call_args.kwargs
+        self.assertFalse(sent.get("ephemeral", False))
+        self.assertEqual(sent["embed"].title, "How did you hear about us?")
+        self.assertIn("**184 of 210 answered**", sent["embed"].description)
+        self.assertIn("Discord · 76 (41.3%)", sent["embed"].description)
+        self.assertIn("Friend · 120 (65.2%)", sent["embed"].description)
+
+        member.roles = []
+        with self.assertRaises(app_commands.CheckFailure):
+            await command._invoke_with_namespace(request, SimpleNamespace())
+        self.assertEqual(get.call_count, 1)
+
+    @patch("harp.requests.get")
+    def test_outreach_status_errors_are_actionable(self, get):
+        get.return_value.text = "private response"
+        for status, expected in [(401, "HARP_BOT_API_KEY"), (403, "application_questions:read"), (404, "allowlist")]:
+            with self.subTest(status=status):
+                get.return_value.status_code = status
+                with self.assertRaisesRegex(HarpError, expected) as failure:
+                    HarpClient("private-test-key").question_stats("event_outreach")
+                self.assertNotIn("private-test-key", str(failure.exception))
+                self.assertNotIn("private response", str(failure.exception))
